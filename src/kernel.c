@@ -796,31 +796,30 @@ static void draw_taskbar(uint32_t *fb, uint32_t pitch, int w, int) {
     draw_str(fb, pitch, x, 5, time_str, 0x00ffffff, 0x00000000);
 }
 
-/* Draw string with word wrapping to fit within max_width pixels (chars = max_width/8) */
+/* Draw string with word wrapping, centered within max_width pixels.
+   Breaks at spaces; long words are hard-broken. Each line is 11px tall. */
 static void draw_str_wrapped(uint32_t *fb, uint32_t pitch, int x, int y, const char *s,
                              uint32_t fg, uint32_t bg, int max_width) {
     int max_chars = max_width / 8;
     if (max_chars < 1) max_chars = 1;
     int line = 0;
+    int cx = x;  /* starting x for each line */
     while (*s) {
+        /* collect a word or up to max_chars */
         int chars = 0;
-        /* find word boundary */
         const char *word_end = s;
         while (*word_end && chars < max_chars) {
             if (*word_end == ' ') break;
             word_end++; chars++;
         }
-        /* if word too long, just break at max_chars */
-        if (chars == max_chars && *word_end && *word_end != ' ') {
-            /* word exceeds line width, hard break */
-        }
+        /* compute centered x for this line */
+        int text_w = chars * 8;
+        cx = x + (max_width - text_w) / 2;
         /* draw this line */
-        int draw_chars = (int)(word_end - s);
-        if (draw_chars > max_chars) draw_chars = max_chars;
-        for (int i = 0; i < draw_chars; i++) {
-            draw_char(fb, pitch, x + i * 8, y + line * 11, s[i], fg, bg);
+        for (int i = 0; i < chars; i++) {
+            draw_char(fb, pitch, cx + i * 8, y + line * 11, s[i], fg, bg);
         }
-        s += draw_chars;
+        s += chars;
         while (*s == ' ') s++;  /* skip spaces */
         line++;
     }
