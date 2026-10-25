@@ -597,6 +597,7 @@ static void cursor_draw(uint32_t *fb, uint32_t pitch, int w, int h, int nx, int 
 #define WIN_H 170
 #define CLICK_GAP_MS 500
 #define CLICK_DIST 20
+#define ICON_GRID 72   /* icon snap pitch */
 
 typedef struct {
     const char *name;
@@ -762,6 +763,16 @@ static void repaint(uint32_t *fb, uint32_t pitch, int w, int h) {
     cursor_draw(fb, pitch, w, h, cur_x, cur_y);
 }
 
+static int drag_app = -1, drag_offx = 0, drag_offy = 0;
+
+static int icon_hit(int mx, int my) {
+    for (int i = 0; i < APP_COUNT; i++)
+        if (mx >= apps[i].x && mx < apps[i].x + WALL_ICON_W &&
+            my >= apps[i].y && my < apps[i].y + WALL_ICON_H + 14)
+            return i;
+    return -1;
+}
+
 static void on_double_click(uint32_t *fb, uint32_t pitch, int w, int h, int mx, int my) {
     if (open_app == APP_WALLPAPER_SET) {
         for (int i = 0; i < 2; i++) {
@@ -774,13 +785,8 @@ static void on_double_click(uint32_t *fb, uint32_t pitch, int w, int h, int mx, 
             }
         }
     } else {
-        for (int i = 0; i < APP_COUNT; i++) {
-            if (mx >= apps[i].x && mx < apps[i].x + WALL_ICON_W &&
-                my >= apps[i].y && my < apps[i].y + WALL_ICON_H + 14) {
-                open_app = i;
-                break;
-            }
-        }
+        int i = icon_hit(mx, my);
+        if (i >= 0) open_app = i;
     }
     repaint(fb, pitch, w, h);
 }
@@ -827,6 +833,23 @@ static void os_main(boot_info_t *bi) {
                 cursor_erase(fb, pitch, w, h);
                 cursor_draw(fb, pitch, w, h, mx, my);
             }
+
+            /* LMB held on an icon: drag it, snapping to the grid */
+            if (drag_app >= 0 && open_app < 0 && (buttons & 1)) {
+                int gx = ((mx - drag_offx + ICON_GRID / 2) / ICON_GRID) * ICON_GRID;
+                int gy = ((my - drag_offy + ICON_GRID / 2) / ICON_GRID) * ICON_GRID;
+                int gmax_x = ((w - WALL_ICON_W - 4) / ICON_GRID) * ICON_GRID;
+                int gmax_y = ((h - WALL_ICON_H - 16) / ICON_GRID) * ICON_GRID;
+                if (gx < 0) gx = 0;
+                if (gy < 0) gy = 0;
+                if (gx > gmax_x) gx = gmax_x;
+                if (gy > gmax_y) gy = gmax_y;
+                if (gx != apps[drag_app].x || gy != apps[drag_app].y) {
+                    apps[drag_app].x = gx;
+                    apps[drag_app].y = gy;
+                    repaint(fb, pitch, w, h);
+                }
+            }
         }
 
         uint8_t kst = inb(0x64);
@@ -839,16 +862,23 @@ static void os_main(boot_info_t *bi) {
 
         int left = buttons & 1;
         if (left && !left_was) {
+            drag_app = (open_app < 0) ? icon_hit(mx, my) : -1;
+            if (drag_app >= 0) {
+                drag_offx = mx - apps[drag_app].x;
+                drag_offy = my - apps[drag_app].y;
+            }
             int dx = mx - last_cx, dy = my - last_cy;
             if (dx < 0) dx = -dx;
             if (dy < 0) dy = -dy;
             if (now - last_click_ms <= CLICK_GAP_MS && dx <= CLICK_DIST && dy <= CLICK_DIST) {
                 on_double_click(fb, pitch, w, h, mx, my);
+                drag_app = -1;   /* second press opened the app, not a drag */
             }
             last_click_ms = now;
             last_cx = mx;
             last_cy = my;
         }
+        if (!left) drag_app = -1;
         left_was = left;
 
         /* uptime in the top-right corner */
