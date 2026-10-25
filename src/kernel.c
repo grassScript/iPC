@@ -506,7 +506,12 @@ static int mouse_poll(int *out_x, int *out_y, int *is_abs, int *out_buttons, int
                 nb -= 4;
             }
             *is_abs = 1;
-            while (inb(0x64) & 1) inb(0x60);
+            /* drop QEMU's fake aux bytes; leave keyboard bytes for the kbd poll */
+            for (;;) {
+                uint8_t st = inb(0x64);
+                if (!(st & 1) || !(st & 0x20)) break;
+                inb(0x60);
+            }
             return 1;
         }
     }
@@ -514,8 +519,8 @@ static int mouse_poll(int *out_x, int *out_y, int *is_abs, int *out_buttons, int
     while (1) {
         uint8_t status = inb(0x64);
         if (!(status & 1)) break;
+        if (!(status & 0x20)) break;
         uint8_t b = inb(0x60);
-        if (!(status & 0x20)) continue;
 
         if (mouse_cycle == 0) {
             if (!(b & 0x08)) continue;
