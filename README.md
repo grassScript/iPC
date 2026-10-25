@@ -37,3 +37,5 @@ make
 # Запуск в QEMU
 make run
 ```
+
+vibecoded btw
