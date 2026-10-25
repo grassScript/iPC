@@ -1,10 +1,10 @@
-# iOS Boot Clone (Bare-metal x86 OS for QEMU)
+# iPC (Bare-metal x86 OS for QEMU)
 
-Клон экрана загрузки iOS / Apple, работающий как самостоятельная загружаемая ОС без сторонних загрузчиков.
+iPC — клон экрана загрузки iOS / Apple, работающий как самостоятельная загружаемая ОС без сторонних загрузчиков.
 
 ## Особенности
-- **16-битный MBR загрузчик** ([`src/boot.asm`](file:///home/suslan/iboot_clone/src/boot.asm)): инициализирует VESA VBE 1024x768x32bpp с Linear Framebuffer, A20, переходит в 32-битный защищённый режим.
-- **Ядро C/ASM** ([`src/kernel.c`](file:///home/suslan/iboot_clone/src/kernel.c)):
+- **16-битный MBR загрузчик** ([`src/boot.asm`](src/boot.asm)): инициализирует VESA VBE 1024x768x32bpp с Linear Framebuffer, A20, переходит в 32-битный защищённый режим.
+- **Ядро C/ASM** ([`src/kernel.c`](src/kernel.c)):
   - Стартовый экран **BROM** (симуляция boot ROM Apple: `brom -> llb -> iboot -> xnu`) с мигающим приглашением — загрузка с яблоком продолжается только после нажатия **Enter**.
   - Отрисовка сглаженного белого логотипа Apple по центру экрана (RLE-сжатие альфа-маски из `apple.png`).
   - Тонкий прогрессбар с закруглениями снизу логотипа (трек `#2c2c2e`, заполнение `#ffffff`).
@@ -31,7 +31,7 @@
 ## Сборка и запуск
 
 ```bash
-# Сборка образа диска build/ios_boot.img
+# Сборка образа диска build/ipc.img
 make
 
 # Запуск в QEMU

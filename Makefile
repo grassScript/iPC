@@ -6,7 +6,7 @@ CFLAGS  := -m32 -ffreestanding -O2 -nostdlib -fno-pie -fno-stack-protector -fno-
 LDFLAGS := -m elf_i386 -T src/linker.ld --oformat binary
 
 BUILD_DIR := build
-IMAGE     := $(BUILD_DIR)/ios_boot.img
+IMAGE     := $(BUILD_DIR)/ipc.img
 
 .PHONY: all clean run
 
