@@ -796,6 +796,36 @@ static void draw_taskbar(uint32_t *fb, uint32_t pitch, int w, int) {
     draw_str(fb, pitch, x, 5, time_str, 0x00ffffff, 0x00000000);
 }
 
+/* Draw string with word wrapping to fit within max_width pixels (chars = max_width/8) */
+static void draw_str_wrapped(uint32_t *fb, uint32_t pitch, int x, int y, const char *s,
+                             uint32_t fg, uint32_t bg, int max_width) {
+    int max_chars = max_width / 8;
+    if (max_chars < 1) max_chars = 1;
+    int line = 0;
+    while (*s) {
+        int chars = 0;
+        /* find word boundary */
+        const char *word_end = s;
+        while (*word_end && chars < max_chars) {
+            if (*word_end == ' ') break;
+            word_end++; chars++;
+        }
+        /* if word too long, just break at max_chars */
+        if (chars == max_chars && *word_end && *word_end != ' ') {
+            /* word exceeds line width, hard break */
+        }
+        /* draw this line */
+        int draw_chars = (int)(word_end - s);
+        if (draw_chars > max_chars) draw_chars = max_chars;
+        for (int i = 0; i < draw_chars; i++) {
+            draw_char(fb, pitch, x + i * 8, y + line * 11, s[i], fg, bg);
+        }
+        s += draw_chars;
+        while (*s == ' ') s++;  /* skip spaces */
+        line++;
+    }
+}
+
 static void draw_desktop(uint32_t *fb, uint32_t pitch, int w, int h) {
     decode_wall(wallpaper_sel);
     blit_wall(fb, pitch, 0, 0, w, h);
@@ -803,8 +833,12 @@ static void draw_desktop(uint32_t *fb, uint32_t pitch, int w, int h) {
     for (int i = 0; i < APP_COUNT; i++) {
         draw_icon(fb, pitch, apps[i].x, apps[i].y, apps[i].icon, WALL_ICON_W, WALL_ICON_H, WALL_ICON_R);
         int ty = apps[i].y + WALL_ICON_H + 5;
-        draw_str(fb, pitch, apps[i].x + 1, ty + 1, apps[i].name, 0x00000000, 0xff000000);
-        draw_str(fb, pitch, apps[i].x, ty, apps[i].name, 0x00ffffff, 0xff000000);
+        /* shadow */
+        draw_str_wrapped(fb, pitch, apps[i].x + 1, ty + 1, apps[i].name,
+                         0x00000000, 0xff000000, WALL_ICON_W);
+        /* main text */
+        draw_str_wrapped(fb, pitch, apps[i].x, ty, apps[i].name,
+                         0x00ffffff, 0xff000000, WALL_ICON_W);
     }
 }
 
