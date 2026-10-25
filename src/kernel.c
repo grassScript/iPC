@@ -52,6 +52,75 @@ static inline void io_wait() {
     outb(0x80, 0);
 }
 
+/* ===== CMOS/RTC Driver ===== */
+
+static inline void rtc_wait_update() {
+    while (inb(0x70) & 0x80) io_wait();
+}
+
+static inline uint8_t rtc_read(uint8_t reg) {
+    outb(0x70, reg);
+    io_wait();
+    return inb(0x71);
+}
+
+static uint8_t bcd_to_bin(uint8_t bcd) {
+    return (bcd & 0x0F) + ((bcd >> 4) * 10);
+}
+
+static int rtc_get_time(uint8_t *hour, uint8_t *min, uint8_t *sec) {
+    uint8_t prev_sec = 0xFF, prev_min = 0xFF, prev_hour = 0xFF;
+    uint8_t status_b = rtc_read(0x0B);
+    int is_bcd = !(status_b & 0x04);
+    int is_12h = !(status_b & 0x02);
+
+    for (int i = 0; i < 1000; i++) {
+        uint8_t s = rtc_read(0x00);
+        uint8_t m = rtc_read(0x02);
+        uint8_t h = rtc_read(0x04);
+        if (s == prev_sec && m == prev_min && h == prev_hour) {
+            if (is_bcd) {
+                s = bcd_to_bin(s);
+                m = bcd_to_bin(m);
+                h = bcd_to_bin(h);
+            }
+            if (is_12h) {
+                uint8_t pm = h & 0x80;
+                h = h & 0x7F;
+                if (pm && h != 12) h += 12;
+                else if (!pm && h == 12) h = 0;
+            }
+            *hour = h; *min = m; *sec = s;
+            return 1;
+        }
+        prev_sec = s; prev_min = m; prev_hour = h;
+    }
+    return 0;
+}
+
+static int rtc_get_date(uint8_t *year, uint8_t *month, uint8_t *day) {
+    uint8_t prev_day = 0xFF, prev_month = 0xFF, prev_year = 0xFF;
+    uint8_t status_b = rtc_read(0x0B);
+    int is_bcd = !(status_b & 0x04);
+
+    for (int i = 0; i < 1000; i++) {
+        uint8_t d = rtc_read(0x07);
+        uint8_t m = rtc_read(0x08);
+        uint8_t y = rtc_read(0x09);
+        if (d == prev_day && m == prev_month && y == prev_year) {
+            if (is_bcd) {
+                d = bcd_to_bin(d);
+                m = bcd_to_bin(m);
+                y = bcd_to_bin(y);
+            }
+            *year = y; *month = m; *day = d;
+            return 1;
+        }
+        prev_day = d; prev_month = m; prev_year = y;
+    }
+    return 0;
+}
+
 static void draw_console_line(uint32_t *fb, uint32_t pitch, int x, int y, const char *s, uint32_t fg, int width_chars) {
     int count = 0;
     while (*s && count < width_chars) {
@@ -690,29 +759,53 @@ static uint32_t uptime_secs_shown = 0xFFFFFFFF;
 
 static void fmt2(char *p, int v) { p[0] = (char)('0' + v / 10); p[1] = (char)('0' + v % 10); }
 
-static void draw_uptime(uint32_t *fb, uint32_t pitch, int w) {
-    uint32_t s = uptime_secs_shown == 0xFFFFFFFF ? 0 : uptime_secs_shown;
-    char line[12] = "up 00:00:00";
-    fmt2(&line[3], (int)((s / 3600) % 100));
-    fmt2(&line[6], (int)((s / 60) % 60));
-    fmt2(&line[9], (int)(s % 60));
-    /* opaque black plate first: transparent redraws leave ghost pixels of the old digits */
-    for (int y = 8; y < 18; y++)
-        for (int x = w - 90; x < w; x++)
-            fb[y * pitch + x] = 0x00000000;
-    draw_str(fb, pitch, w - 88, 9, line, 0x00ffffff, 0x00000000);
+static void draw_taskbar(uint32_t *fb, uint32_t pitch, int w, int) {
+    uint8_t hour = 0, min = 0, sec = 0;
+    uint8_t year = 0, month = 0, day = 0;
+    int have_time = rtc_get_time(&hour, &min, &sec);
+    int have_date = rtc_get_date(&year, &month, &day);
+
+    char time_str[20] = "00:00:00";
+    if (have_time) {
+        fmt2(&time_str[0], hour);
+        fmt2(&time_str[3], min);
+        fmt2(&time_str[6], sec);
+    }
+    if (have_date) {
+        time_str[8] = ' ';
+        fmt2(&time_str[9], day);
+        time_str[11] = '.';
+        fmt2(&time_str[12], month);
+        time_str[14] = '.';
+        fmt2(&time_str[15], year);
+    }
+
+    /* taskbar background - full width, 22px tall */
+    for (int y = 0; y < 22; y++)
+        for (int x = 0; x < w; x++)
+            fb[y * pitch + x] = 0x001c1c1e;
+
+    /* bottom border line */
+    for (int x = 0; x < w; x++)
+        fb[22 * pitch + x] = 0x003a3a3c;
+
+    /* time/date on the right — right-align: each char is 8px wide */
+    int str_len = have_date ? 17 : 8;
+    int x = w - str_len * 8 - 4;  /* 4px margin from right edge */
+    if (x < 4) x = 4;             /* don't go off left edge */
+    draw_str(fb, pitch, x, 5, time_str, 0x00ffffff, 0x00000000);
 }
 
 static void draw_desktop(uint32_t *fb, uint32_t pitch, int w, int h) {
     decode_wall(wallpaper_sel);
     blit_wall(fb, pitch, 0, 0, w, h);
+    draw_taskbar(fb, pitch, w, h);
     for (int i = 0; i < APP_COUNT; i++) {
         draw_icon(fb, pitch, apps[i].x, apps[i].y, apps[i].icon, WALL_ICON_W, WALL_ICON_H, WALL_ICON_R);
         int ty = apps[i].y + WALL_ICON_H + 5;
         draw_str(fb, pitch, apps[i].x + 1, ty + 1, apps[i].name, 0x00000000, 0xff000000);
         draw_str(fb, pitch, apps[i].x, ty, apps[i].name, 0x00ffffff, 0xff000000);
     }
-    draw_uptime(fb, pitch, w);
 }
 
 static void wallpaper_win_rect(int w, int h, int *wx, int *wy) {
@@ -881,11 +974,11 @@ static void os_main(boot_info_t *bi) {
         if (!left) drag_app = -1;
         left_was = left;
 
-        /* uptime in the top-right corner */
+        /* taskbar time in the top-right corner - RTC updates every second */
         uint32_t secs = now / 1000;
         if (secs != uptime_secs_shown) {
             uptime_secs_shown = secs;
-            draw_uptime(fb, pitch, w);
+            draw_taskbar(fb, pitch, w, h);
         }
 
         __asm__ volatile ("pause");
