@@ -676,7 +676,7 @@ typedef struct {
 
 /* every icon is drawn with programmatic rounding (radius WALL_ICON_R); future apps append here */
 static app_def_t apps[] = {
-    { "Wallpaper Set", wallpaper_icon_data, 20, 20 },
+    { "Wallpaper Set", wallpaper_icon_data, 20, 30 },
 };
 #define APP_COUNT (int)(sizeof(apps) / sizeof(apps[0]))
 #define APP_WALLPAPER_SET 0
@@ -930,13 +930,15 @@ static void os_main(boot_info_t *bi) {
             /* LMB held on an icon: drag it, snapping to the grid */
             if (drag_app >= 0 && open_app < 0 && (buttons & 1)) {
                 int gx = ((mx - drag_offx + ICON_GRID / 2) / ICON_GRID) * ICON_GRID;
+                /* taskbar is 22px tall + 4px margin; icons are 48px + 14px label */
+                int min_y = 22 + 4;  /* below taskbar */
+                int gmax_y = h - WALL_ICON_H - 16 - 4;  /* below bottom border */
                 int gy = ((my - drag_offy + ICON_GRID / 2) / ICON_GRID) * ICON_GRID;
-                int gmax_x = ((w - WALL_ICON_W - 4) / ICON_GRID) * ICON_GRID;
-                int gmax_y = ((h - WALL_ICON_H - 16) / ICON_GRID) * ICON_GRID;
-                if (gx < 0) gx = 0;
-                if (gy < 0) gy = 0;
-                if (gx > gmax_x) gx = gmax_x;
+                if (gy < min_y) gy = min_y;
                 if (gy > gmax_y) gy = gmax_y;
+                if (gx < 0) gx = 0;
+                int gmax_x = ((w - WALL_ICON_W - 4) / ICON_GRID) * ICON_GRID;
+                if (gx > gmax_x) gx = gmax_x;
                 if (gx != apps[drag_app].x || gy != apps[drag_app].y) {
                     apps[drag_app].x = gx;
                     apps[drag_app].y = gy;
