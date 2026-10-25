@@ -31,7 +31,7 @@ $(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/entry.o $(BUILD_DIR)/kernel.o src/linker.l
 	ld $(LDFLAGS) $(BUILD_DIR)/entry.o $(BUILD_DIR)/kernel.o -o $@
 
 $(IMAGE): $(BUILD_DIR)/boot.bin $(BUILD_DIR)/kernel.bin
-	dd if=/dev/zero of=$@ bs=512 count=128 status=none
+	dd if=/dev/zero of=$@ bs=512 count=192 status=none
 	dd if=$(BUILD_DIR)/boot.bin of=$@ conv=notrunc bs=512 count=1 seek=0 status=none
 	dd if=$(BUILD_DIR)/kernel.bin of=$@ conv=notrunc bs=512 seek=1 status=none
 
