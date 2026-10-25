@@ -495,25 +495,26 @@ static int mouse_poll(int *out_x, int *out_y, int *is_abs, int *out_buttons, int
         uint32_t eax = 0x564D5868, ebx = 0, ecx = 40, edx = 0x5658;
         vmmouse_cmd(&eax, &ebx, &ecx, &edx);
         uint32_t nb = eax & 0xFFFF;
-        if (nb >= 4) {
-            while (nb >= 4) {
-                eax = 0x564D5868; ebx = 4; ecx = 39; edx = 0x5658;
-                vmmouse_cmd(&eax, &ebx, &ecx, &edx);
-                *out_x = ((uint32_t)ebx * (uint32_t)w) / 65535;
-                *out_y = ((uint32_t)ecx * (uint32_t)h) / 65535;
-                /* QEMU vmmouse uses PS/2 status bits: 0x20 left, 0x10 right, 0x08 middle */
-                *out_buttons = ((eax & 0x20) ? 1 : 0) | ((eax & 0x10) ? 2 : 0) | ((eax & 0x08) ? 4 : 0);
-                nb -= 4;
-            }
-            *is_abs = 1;
-            /* drop QEMU's fake aux bytes; leave keyboard bytes for the kbd poll */
-            for (;;) {
-                uint8_t st = inb(0x64);
-                if (!(st & 1) || !(st & 0x20)) break;
-                inb(0x60);
-            }
-            return 1;
+        int got = (nb >= 4);
+        while (nb >= 4) {
+            eax = 0x564D5868; ebx = 4; ecx = 39; edx = 0x5658;
+            vmmouse_cmd(&eax, &ebx, &ecx, &edx);
+            *out_x = ((uint32_t)ebx * (uint32_t)w) / 65535;
+            *out_y = ((uint32_t)ecx * (uint32_t)h) / 65535;
+            /* QEMU vmmouse uses PS/2 status bits: 0x20 left, 0x10 right, 0x08 middle */
+            *out_buttons = ((eax & 0x20) ? 1 : 0) | ((eax & 0x10) ? 2 : 0) | ((eax & 0x08) ? 4 : 0);
+            nb -= 4;
         }
+        if (got) *is_abs = 1;
+        /* every aux byte in vmmouse mode is QEMU's fake notification packet; parsing
+         * it below as relative motion flips buttons/deltas (held LMB drag looked
+         * like repeated clicks) - drop all aux bytes here, leave kbd bytes alone */
+        for (;;) {
+            uint8_t st = inb(0x64);
+            if (!(st & 1) || !(st & 0x20)) break;
+            inb(0x60);
+        }
+        return got;
     }
 
     while (1) {
