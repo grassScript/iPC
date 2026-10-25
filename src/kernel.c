@@ -694,8 +694,11 @@ static void draw_uptime(uint32_t *fb, uint32_t pitch, int w) {
     fmt2(&line[3], (int)((s / 3600) % 100));
     fmt2(&line[6], (int)((s / 60) % 60));
     fmt2(&line[9], (int)(s % 60));
-    draw_str(fb, pitch, w - 91, 8, line, 0x00000000, 0xff000000);
-    draw_str(fb, pitch, w - 92, 7, line, 0x00ffffff, 0xff000000);
+    /* opaque black plate first: transparent redraws leave ghost pixels of the old digits */
+    for (int y = 8; y < 18; y++)
+        for (int x = w - 90; x < w; x++)
+            fb[y * pitch + x] = 0x00000000;
+    draw_str(fb, pitch, w - 88, 9, line, 0x00ffffff, 0x00000000);
 }
 
 static void draw_desktop(uint32_t *fb, uint32_t pitch, int w, int h) {
