@@ -3,4 +3,7 @@ src/apple_logo.h
 src/font8x8.h
 src/cursor.h
 src/wallpaper_icon.h
+src/settings_icon.h
+src/close_icon.h
 src/wallpapers.h
+__pycache__/

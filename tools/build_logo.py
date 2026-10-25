@@ -75,7 +75,8 @@ def generate_cursor(src_path, dst_path):
             f.write("    " + ", ".join(pixels[i:i+8]) + ",\n")
         f.write("};\n")
 
-def generate_wallpaper_icon(src_path, dst_path, size=48):
+def generate_icon(src_path, dst_path, array, prefix, size):
+    # app icons must be 48px: kernel.c draws every apps[] entry at WALL_ICON_W/H
     img = Image.open(src_path).convert('RGB')
     resized = img.resize((size, size), Image.Resampling.LANCZOS)
     pixels = []
@@ -87,8 +88,8 @@ def generate_wallpaper_icon(src_path, dst_path, size=48):
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     with open(dst_path, 'w') as f:
         f.write("#pragma once\n\n")
-        f.write(f"#define WALL_ICON_W {size}\n#define WALL_ICON_H {size}\n#define WALL_ICON_R 8\n\n")
-        f.write("static const unsigned int wallpaper_icon_data[] = {\n")
+        f.write(f"#define {prefix}_W {size}\n#define {prefix}_H {size}\n#define {prefix}_R 8\n\n")
+        f.write(f"static const unsigned int {array}[] = {{\n")
         for i in range(0, len(pixels), 8):
             f.write("    " + ", ".join(pixels[i:i+8]) + ",\n")
         f.write("};\n")
@@ -148,7 +149,9 @@ if __name__ == '__main__':
     generate_logo(logo_src, logo_dst)
     generate_font(font_dst)
     generate_cursor(cur_src, cur_dst)
-    generate_wallpaper_icon('wallpaper_icon.bmp', 'src/wallpaper_icon.h')
+    generate_icon('wallpaper_icon.bmp', 'src/wallpaper_icon.h', 'wallpaper_icon_data', 'WALL_ICON', 48)
+    generate_icon('settings_icon.bmp', 'src/settings_icon.h', 'settings_icon_data', 'SETTINGS_ICON', 48)
+    generate_icon('close.bmp', 'src/close_icon.h', 'close_icon_data', 'CLOSE_ICON', 16)
     generate_wallpapers('wall1.png', 'wall2.png', 'src/wallpapers.h')
 
 

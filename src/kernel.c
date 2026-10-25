@@ -1,6 +1,8 @@
 #include "apple_logo.h"
 #include "cursor.h"
 #include "wallpaper_icon.h"
+#include "settings_icon.h"
+#include "close_icon.h"
 #include "wallpapers.h"
 #include "disasm.h"
 #include <stddef.h>
@@ -667,6 +669,7 @@ static void cursor_draw(uint32_t *fb, uint32_t pitch, int w, int h, int nx, int 
 #define CLICK_GAP_MS 500
 #define CLICK_DIST 20
 #define ICON_GRID 72   /* icon snap pitch */
+#define TASKBAR_H 22
 
 typedef struct {
     const char *name;
@@ -674,16 +677,42 @@ typedef struct {
     int x, y;
 } app_def_t;
 
-/* every icon is drawn with programmatic rounding (radius WALL_ICON_R); future apps append here */
+/* every icon is drawn with programmatic rounding (radius WALL_ICON_R); future apps append here.
+ * x/y are multiples of ICON_GRID - the same lattice the drag snap produces */
 static app_def_t apps[] = {
-    { "Wallpaper Set", wallpaper_icon_data, 20, 30 },
+    { "Wallpaper Set", wallpaper_icon_data, 72, 72 },
+    { "Settings", settings_icon_data, 72, 144 },
 };
 #define APP_COUNT (int)(sizeof(apps) / sizeof(apps[0]))
 #define APP_WALLPAPER_SET 0
+#define APP_SETTINGS 1
 
 static int open_app = -1;
 static int wallpaper_sel = 0;   /* 0 = wall1, 1 = wall2 */
 static uint16_t wall16[WALL_W * WALL_H];
+
+/* ===== Settings state ===== */
+
+static int settings_tab = 0;    /* 0 = Time, 1 = Taskbar */
+static int taskbar_bottom = 0;  /* 0 = top of the screen, 1 = bottom */
+static int tz_sel = 0;
+
+typedef struct {
+    const char *name;
+    int minutes;   /* offset from UTC */
+} tz_def_t;
+
+static const tz_def_t tzs[] = {
+    { "UTC-8  Los Angeles", -480 },
+    { "UTC-5  New York",    -300 },
+    { "UTC+0  London",         0 },
+    { "UTC+3  Moscow",       180 },
+    { "UTC+5  Karachi",      300 },
+    { "UTC+5:30 Mumbai",     330 },
+    { "UTC+8  Beijing",      480 },
+    { "UTC+10 Sydney",       600 },
+};
+#define TZ_COUNT (int)(sizeof(tzs) / sizeof(tzs[0]))
 
 /* PIT ch2 free-running down counter (~54.9 ms wrap), latched every poll iteration
  * so pit_ms() stays monotonic without interrupts. Must be called at least ~every 50 ms. */
@@ -759,11 +788,19 @@ static uint32_t uptime_secs_shown = 0xFFFFFFFF;
 
 static void fmt2(char *p, int v) { p[0] = (char)('0' + v / 10); p[1] = (char)('0' + v % 10); }
 
-static void draw_taskbar(uint32_t *fb, uint32_t pitch, int w, int) {
+static void draw_taskbar(uint32_t *fb, uint32_t pitch, int w, int h) {
     uint8_t hour = 0, min = 0, sec = 0;
     uint8_t year = 0, month = 0, day = 0;
     int have_time = rtc_get_time(&hour, &min, &sec);
     int have_date = rtc_get_date(&year, &month, &day);
+
+    /* Settings > Time: the RTC is read as UTC (POSIX convention), the picked zone shifts the clock.
+     * shortcut: crossing midnight rolls the hour only, the date stays as-is; needs a real calendar */
+    int tm = hour * 60 + min + tzs[tz_sel].minutes;
+    tm %= 1440;
+    if (tm < 0) tm += 1440;
+    hour = (uint8_t)(tm / 60);
+    min = (uint8_t)(tm % 60);
 
     char time_str[20] = "00:00:00";
     if (have_time) {
@@ -780,20 +817,21 @@ static void draw_taskbar(uint32_t *fb, uint32_t pitch, int w, int) {
         fmt2(&time_str[15], year);
     }
 
-    /* taskbar background - full width, 22px tall */
-    for (int y = 0; y < 22; y++)
+    /* taskbar background - full width, TASKBAR_H tall, pinned top or bottom */
+    int bar_y = taskbar_bottom ? h - TASKBAR_H - 1 : 0;
+    for (int y = 0; y < TASKBAR_H; y++)
         for (int x = 0; x < w; x++)
-            fb[y * pitch + x] = 0x001c1c1e;
+            fb[(bar_y + y) * pitch + x] = 0x001c1c1e;
 
-    /* bottom border line */
+    /* border line on the edge facing the desktop */
     for (int x = 0; x < w; x++)
-        fb[22 * pitch + x] = 0x003a3a3c;
+        fb[(taskbar_bottom ? bar_y - 1 : bar_y + TASKBAR_H) * pitch + x] = 0x003a3a3c;
 
     /* time/date on the right — right-align: each char is 8px wide */
     int str_len = have_date ? 17 : 8;
     int x = w - str_len * 8 - 4;  /* 4px margin from right edge */
     if (x < 4) x = 4;             /* don't go off left edge */
-    draw_str(fb, pitch, x, 5, time_str, 0x00ffffff, 0x00000000);
+    draw_str(fb, pitch, x, bar_y + 5, time_str, 0x00ffffff, 0x00000000);
 }
 
 /* Draw string with word wrapping, centered within max_width pixels.
@@ -841,27 +879,46 @@ static void draw_desktop(uint32_t *fb, uint32_t pitch, int w, int h) {
     }
 }
 
-static void wallpaper_win_rect(int w, int h, int *wx, int *wy) {
+static void win_rect(int w, int h, int *wx, int *wy) {
     *wx = (w - WIN_W) / 2;
     *wy = (h - WIN_H) / 2;
 }
 
-static void wallpaper_preview_xy(int w, int h, int idx, int *px, int *py) {
-    wallpaper_win_rect(w, h, px, py);
-    *px += 12 + idx * (WALL_W + 16);
-    *py += 30;
-}
-
-static void draw_wallpaper_win(uint32_t *fb, uint32_t pitch, int w, int h) {
-    int wx, wy;
-    wallpaper_win_rect(w, h, &wx, &wy);
+static void draw_window_frame(uint32_t *fb, uint32_t pitch, int wx, int wy) {
     for (int y = 0; y < WIN_H; y++) {
         for (int x = 0; x < WIN_W; x++) {
             fb[(wy + y) * pitch + wx + x] =
                 (x == 0 || y == 0 || x == WIN_W - 1 || y == WIN_H - 1) ? 0x003a3a3c : 0x001c1c1e;
         }
     }
+}
+
+/* close (X) corner, shared by every app window */
+static void win_close_rect(int wx, int wy, int *rx, int *ry) {
+    *rx = wx + WIN_W - CLOSE_ICON_W - 8;
+    *ry = wy + 8;
+}
+
+static void draw_window_close(uint32_t *fb, uint32_t pitch, int wx, int wy) {
+    int cx, cy;
+    win_close_rect(wx, wy, &cx, &cy);
+    /* same programmatic rounding as the desktop icons: the white corners of
+     * close.bmp drop out and only the red disc with the white X stays */
+    draw_icon(fb, pitch, cx, cy, close_icon_data, CLOSE_ICON_W, CLOSE_ICON_H, CLOSE_ICON_R);
+}
+
+static void wallpaper_preview_xy(int w, int h, int idx, int *px, int *py) {
+    win_rect(w, h, px, py);
+    *px += 12 + idx * (WALL_W + 16);
+    *py += 30;
+}
+
+static void draw_wallpaper_win(uint32_t *fb, uint32_t pitch, int w, int h) {
+    int wx, wy;
+    win_rect(w, h, &wx, &wy);
+    draw_window_frame(fb, pitch, wx, wy);
     draw_str(fb, pitch, wx + 12, wy + 12, "Wallpaper Set", 0x00ffffff, 0xff000000);
+    draw_window_close(fb, pitch, wx, wy);
     for (int i = 0; i < 2; i++) {
         int px, py;
         wallpaper_preview_xy(w, h, i, &px, &py);
@@ -879,22 +936,137 @@ static void draw_wallpaper_win(uint32_t *fb, uint32_t pitch, int w, int h) {
         }
         draw_str(fb, pitch, px, py + WALL_H + 4, i ? "wall2" : "wall1", 0x00ffffff, 0xff000000);
     }
-    draw_str(fb, pitch, wx + 12, wy + WIN_H - 16, "double-click a wallpaper to set it - esc closes", 0x00aaaaaa, 0xff000000);
+    draw_str(fb, pitch, wx + 12, wy + WIN_H - 16, "double-click a wallpaper to set it - X or esc closes", 0x00aaaaaa, 0xff000000);
+}
+
+/* ===== Settings window: Time (timezone) and Taskbar (position) ===== */
+
+#define TAB_W 76
+#define TAB_H 20
+#define TZ_W 164
+#define TZ_H 18
+#define TZ_COLS 2
+#define POS_W 150
+#define POS_H 26
+
+static void settings_tab_rect(int wx, int wy, int idx, int *rx, int *ry) {
+    *rx = wx + 12 + idx * (TAB_W + 4);
+    *ry = wy + 8;
+}
+
+static void settings_tz_rect(int wx, int wy, int idx, int *rx, int *ry) {
+    *rx = wx + 14 + (idx % TZ_COLS) * (TZ_W + 8);
+    *ry = wy + 40 + (idx / TZ_COLS) * (TZ_H + 4);
+}
+
+/* idx 0 = taskbar back on top, 1 = taskbar down to the bottom */
+static void settings_pos_rect(int wx, int wy, int idx, int *rx, int *ry) {
+    *rx = wx + 16 + idx * (POS_W + 12);
+    *ry = wy + 64;
+}
+
+static int rect_hit(int mx, int my, int x, int y, int rw, int rh) {
+    return mx >= x && mx < x + rw && my >= y && my < y + rh;
+}
+
+static void draw_button(uint32_t *fb, uint32_t pitch, int x, int y, int bw, int bh,
+                        const char *label, int active) {
+    for (int yy = 0; yy < bh; yy++) {
+        for (int xx = 0; xx < bw; xx++) {
+            fb[(y + yy) * pitch + x + xx] =
+                (xx == 0 || yy == 0 || xx == bw - 1 || yy == bh - 1)
+                    ? (active ? 0x00ffffff : 0x003a3a3c) : 0x002c2c2e;
+        }
+    }
+    int len = 0;
+    while (label[len]) len++;
+    draw_str(fb, pitch, x + (bw - len * 8) / 2, y + (bh - 8) / 2, label,
+             active ? 0x00ffffff : 0x00bbbbbb, 0xff000000);
+}
+
+static void draw_settings_win(uint32_t *fb, uint32_t pitch, int w, int h) {
+    int wx, wy;
+    win_rect(w, h, &wx, &wy);
+    draw_window_frame(fb, pitch, wx, wy);
+
+    for (int i = 0; i < 2; i++) {
+        int bx, by;
+        settings_tab_rect(wx, wy, i, &bx, &by);
+        draw_button(fb, pitch, bx, by, TAB_W, TAB_H, i ? "Taskbar" : "Time", settings_tab == i);
+    }
+
+    draw_window_close(fb, pitch, wx, wy);
+
+    if (settings_tab == 0) {
+        for (int i = 0; i < TZ_COUNT; i++) {
+            int bx, by;
+            settings_tz_rect(wx, wy, i, &bx, &by);
+            draw_button(fb, pitch, bx, by, TZ_W, TZ_H, tzs[i].name, tz_sel == i);
+        }
+    } else {
+        int bx, by;
+        settings_pos_rect(wx, wy, 0, &bx, &by);
+        draw_button(fb, pitch, bx, by, POS_W, POS_H, "Move to top", !taskbar_bottom);
+        settings_pos_rect(wx, wy, 1, &bx, &by);
+        draw_button(fb, pitch, bx, by, POS_W, POS_H, "Move to bottom", taskbar_bottom);
+    }
+
+    draw_str(fb, pitch, wx + 12, wy + WIN_H - 16, "click a button to apply - X or esc closes", 0x00aaaaaa, 0xff000000);
 }
 
 static void repaint(uint32_t *fb, uint32_t pitch, int w, int h) {
     cursor_erase(fb, pitch, w, h);
     draw_desktop(fb, pitch, w, h);
     if (open_app == APP_WALLPAPER_SET) draw_wallpaper_win(fb, pitch, w, h);
+    if (open_app == APP_SETTINGS) draw_settings_win(fb, pitch, w, h);
     cursor_draw(fb, pitch, w, h, cur_x, cur_y);
+}
+
+#define CLOSE_FRAMES 12
+#define CLOSE_FRAME_MS 20
+
+/* Base close animation for every app window: the frame collapses to its centre.
+ * Called with open_app already -1, so each frame repaints the desktop underneath. */
+static void animate_app_close(uint32_t *fb, uint32_t pitch, int w, int h) {
+    int wx, wy;
+    win_rect(w, h, &wx, &wy);
+    for (int f = 0; f < CLOSE_FRAMES; f++) {
+        uint32_t until = pit_ms() + CLOSE_FRAME_MS;
+        repaint(fb, pitch, w, h);
+        int k = WIN_W - (WIN_W - 8) * f / CLOSE_FRAMES;
+        int kh = WIN_H - (WIN_H - 8) * f / CLOSE_FRAMES;
+        int x0 = wx + (WIN_W - k) / 2, y0 = wy + (WIN_H - kh) / 2;
+        for (int x = 0; x < k; x++) {
+            fb[y0 * pitch + x0 + x] = 0x00ffffff;
+            fb[(y0 + kh - 1) * pitch + x0 + x] = 0x00ffffff;
+        }
+        for (int y = 0; y < kh; y++) {
+            fb[(y0 + y) * pitch + x0] = 0x00ffffff;
+            fb[(y0 + y) * pitch + x0 + k - 1] = 0x00ffffff;
+        }
+        while (pit_ms() < until) __asm__ volatile ("pause");
+    }
+    repaint(fb, pitch, w, h);
+}
+
+/* the single place any app window closes: Esc, the X button, or an app's own action */
+static void close_app(uint32_t *fb, uint32_t pitch, int w, int h) {
+    open_app = -1;
+    animate_app_close(fb, pitch, w, h);
+}
+
+static int close_btn_hit(int w, int h, int mx, int my) {
+    int wx, wy, cx, cy;
+    win_rect(w, h, &wx, &wy);
+    win_close_rect(wx, wy, &cx, &cy);
+    return rect_hit(mx, my, cx, cy, CLOSE_ICON_W, CLOSE_ICON_H);
 }
 
 static int drag_app = -1, drag_offx = 0, drag_offy = 0;
 
 static int icon_hit(int mx, int my) {
     for (int i = 0; i < APP_COUNT; i++)
-        if (mx >= apps[i].x && mx < apps[i].x + WALL_ICON_W &&
-            my >= apps[i].y && my < apps[i].y + WALL_ICON_H + 14)
+        if (rect_hit(mx, my, apps[i].x, apps[i].y, WALL_ICON_W, WALL_ICON_H + 14))
             return i;
     return -1;
 }
@@ -904,15 +1076,41 @@ static void on_double_click(uint32_t *fb, uint32_t pitch, int w, int h, int mx, 
         for (int i = 0; i < 2; i++) {
             int px, py;
             wallpaper_preview_xy(w, h, i, &px, &py);
-            if (mx >= px && mx < px + WALL_W && my >= py && my < py + WALL_H) {
+            if (rect_hit(mx, my, px, py, WALL_W, WALL_H)) {
                 wallpaper_sel = i;
-                open_app = -1;
+                close_app(fb, pitch, w, h);
                 break;
             }
         }
-    } else {
+    } else if (open_app < 0) {
         int i = icon_hit(mx, my);
         if (i >= 0) open_app = i;
+    }
+    repaint(fb, pitch, w, h);
+}
+
+/* Settings controls react to a single click, unlike the double-click desktop.
+ * The X is handled by the caller before this runs. */
+static void on_settings_click(uint32_t *fb, uint32_t pitch, int w, int h, int mx, int my) {
+    int wx, wy;
+    win_rect(w, h, &wx, &wy);
+
+    int bx, by;
+    for (int i = 0; i < 2; i++) {
+        settings_tab_rect(wx, wy, i, &bx, &by);
+        if (rect_hit(mx, my, bx, by, TAB_W, TAB_H)) settings_tab = i;
+    }
+
+    if (settings_tab == 0) {
+        for (int i = 0; i < TZ_COUNT; i++) {
+            settings_tz_rect(wx, wy, i, &bx, &by);
+            if (rect_hit(mx, my, bx, by, TZ_W, TZ_H)) tz_sel = i;
+        }
+    } else {
+        for (int i = 0; i < 2; i++) {
+            settings_pos_rect(wx, wy, i, &bx, &by);
+            if (rect_hit(mx, my, bx, by, POS_W, POS_H)) taskbar_bottom = i;
+        }
     }
     repaint(fb, pitch, w, h);
 }
@@ -963,9 +1161,9 @@ static void os_main(boot_info_t *bi) {
             /* LMB held on an icon: drag it, snapping to the grid */
             if (drag_app >= 0 && open_app < 0 && (buttons & 1)) {
                 int gx = ((mx - drag_offx + ICON_GRID / 2) / ICON_GRID) * ICON_GRID;
-                /* taskbar is 22px tall + 4px margin; icons are 48px + 14px label */
-                int min_y = 22 + 4;  /* below taskbar */
-                int gmax_y = h - WALL_ICON_H - 16 - 4;  /* below bottom border */
+                /* taskbar block is TASKBAR_H + 1px border, plus 4px margin; icons are 48px + 14px label */
+                int min_y = taskbar_bottom ? 4 : TASKBAR_H + 1 + 4;
+                int gmax_y = (taskbar_bottom ? h - TASKBAR_H - 1 : h) - WALL_ICON_H - 16 - 4;
                 int gy = ((my - drag_offy + ICON_GRID / 2) / ICON_GRID) * ICON_GRID;
                 if (gy < min_y) gy = min_y;
                 if (gy > gmax_y) gy = gmax_y;
@@ -983,28 +1181,33 @@ static void os_main(boot_info_t *bi) {
         uint8_t kst = inb(0x64);
         if ((kst & 1) && !(kst & 0x20)) {
             if (inb(0x60) == 0x01 && open_app >= 0) {   /* Esc closes the app */
-                open_app = -1;
-                repaint(fb, pitch, w, h);
+                close_app(fb, pitch, w, h);
             }
         }
 
         int left = buttons & 1;
         if (left && !left_was) {
-            drag_app = (open_app < 0) ? icon_hit(mx, my) : -1;
-            if (drag_app >= 0) {
-                drag_offx = mx - apps[drag_app].x;
-                drag_offy = my - apps[drag_app].y;
+            if (open_app >= 0 && close_btn_hit(w, h, mx, my)) {
+                close_app(fb, pitch, w, h);              /* the X closes any window */
+            } else if (open_app == APP_SETTINGS) {  /* window buttons react to a single click */
+                on_settings_click(fb, pitch, w, h, mx, my);
+            } else {
+                drag_app = (open_app < 0) ? icon_hit(mx, my) : -1;
+                if (drag_app >= 0) {
+                    drag_offx = mx - apps[drag_app].x;
+                    drag_offy = my - apps[drag_app].y;
+                }
+                int dx = mx - last_cx, dy = my - last_cy;
+                if (dx < 0) dx = -dx;
+                if (dy < 0) dy = -dy;
+                if (now - last_click_ms <= CLICK_GAP_MS && dx <= CLICK_DIST && dy <= CLICK_DIST) {
+                    on_double_click(fb, pitch, w, h, mx, my);
+                    drag_app = -1;   /* second press opened the app, not a drag */
+                }
+                last_click_ms = now;
+                last_cx = mx;
+                last_cy = my;
             }
-            int dx = mx - last_cx, dy = my - last_cy;
-            if (dx < 0) dx = -dx;
-            if (dy < 0) dy = -dy;
-            if (now - last_click_ms <= CLICK_GAP_MS && dx <= CLICK_DIST && dy <= CLICK_DIST) {
-                on_double_click(fb, pitch, w, h, mx, my);
-                drag_app = -1;   /* second press opened the app, not a drag */
-            }
-            last_click_ms = now;
-            last_cx = mx;
-            last_cy = my;
         }
         if (!left) drag_app = -1;
         left_was = left;
